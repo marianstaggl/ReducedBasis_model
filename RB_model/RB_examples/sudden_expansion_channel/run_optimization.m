@@ -16,9 +16,12 @@ geo_base = load('+util_fun\geo_base.mat').geo_base;
 geo_fun = @(x) reshape(geo_base(:,1) + x*geo_base(:,2), [], 2);
 
 %% specify the target value (can be a scalar or a vector)
-target_value = 8e-3 * ones(200, 1); 
-target_value(1:50) = 0 * target_value(1:50);
+% target velocity profile at midsection
+target_profile = 8e-3 * ones(200, 1); 
+target_profile(1:50) = 0 * target_profile(1:50);
 
+% target value for separation length
+target_len = 5;
 %% evaluate the reduced model
 % get the initial parameters
 init_par = [0.8, 0.5, 0];
@@ -26,7 +29,9 @@ init_par = [0.8, 0.5, 0];
 % define the objective function
 eval_fun = @(ro_model, par_vec) util_fun.evaluate_model(ro_model, par_vec, geo_fun);
 obj_fun = @(sol) mean((reshape(util_fun.obj_velprofile(ro_model, sol), [], 1)...
-    - target_value).^2, "all");
+    - target_profile).^2, "all");
+% obj_fun = @(sol) mean((reshape(util_fun.obj_separation(ro_model, sol), [], 1)...
+%     - target_len).^2, "all");
 
 % run the optimization loop
 param = ro_model.run_optimization(eval_fun, obj_fun, init_par,...
@@ -40,9 +45,9 @@ ro_model.fe_model.plot_field(extractdata(s));
 % plot the result of the optimization
 figure; hold on;
 plot(extractdata(util_fun.obj_velprofile(ro_model, s)),linspace(0, 1, 200)); 
-plot(target_value,linspace(0, 1, 200)); grid on;
+plot(target_profile,linspace(0, 1, 200)); grid on;
 legend({'optimization result', 'target value'})
 
-opti_case.target_value = target_value;
+opti_case.target_value = target_profile;
 opti_case.optim_results = extractdata(util_fun.obj_velprofile(ro_model, s));
 save('opti_case', 'opti_case')
