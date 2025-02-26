@@ -1,0 +1,9 @@
+% boundary file for the reduced model. each edge which is associated with 
+% a boundary needs to be specified here. This information is used to 
+% decompose the modes into boundary and domain modes.
+%
+% the file has the following format:
+% edgeid(number)   variable(u,v,a, visc)
+% u velocity boundarys
+1		u
+2       a
