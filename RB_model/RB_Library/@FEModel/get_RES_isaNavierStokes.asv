@@ -1,0 +1,133 @@
+function Res = get_RES_isaNavierStokes(self, curr_cond, opts)
+%GET_OP_ISNAVIERSTOKES get the operator for the incompressible navier stokes
+
+% check the systems variables (u, v, a)
+if sum(ismember(self.sys_variables, {'u', 'v', 'a'})) ~= 3
+    error('this functions works for the field variables u, v, and a')
+end
+
+%% preallocate various variables
+% get shortcuts to the physical properties and cell counts
+mue = opts.mue; gamma = 1.4;
+n = size(self.mesh.nodes,1); 
+[n_elem, n_base] = size(self.mesh.elems);
+
+% preallocate the vectors for the sparse matrix assembly
+temp = zeros(1, (n_elem*n_base)); k_idx = int64(temp);
+uu1_val = temp; ua1_val = temp;
+vv1_val = temp; va1_val = temp;
+au1_val = temp; av1_val = temp; aa1_val = temp;
+
+% get the basefunction at the integration points
+elems = self.mesh.elems;
+int_points = self.mesh.ref_elem.int_points;
+b = repmat(self.mesh.ref_elem.get_b(int_points), 1, 1, n_elem);
+dbdx = self.dbdx; dbdy = self.dbdy; weights = self.weights;
+
+% get the current conditions and reshape them into a new order
+curr_cond = reshape(curr_cond, [], 3);
+
+% calculate velocities in the integration points
+uid = find(ismember(self.sys_variables,'u')); us = (uid-1) * n;
+uvec = curr_cond(:,uid); uref = uvec(self.mesh.elems);
+u = sum(permute(b, [3, 2, 1]) .* permute(uref, [1, 3, 2]), 3);
+dudx = sum(permute(dbdx, [3, 2, 1]) .* permute(uref, [1, 3, 2]), 3);
+dudy = sum(permute(dbdy, [3, 2, 1]) .* permute(uref, [1, 3, 2]), 3);
+
+vid = find(ismember(self.sys_variables,'v')); vs = (vid-1) * n;
+vvec = curr_cond(:,vid); vref = vvec(self.mesh.elems);
+v = sum(permute(b, [3, 2, 1]) .* permute(vref, [1, 3, 2]), 3);
+dvdx = sum(permute(dbdx, [3, 2, 1]) .* permute(vref, [1, 3, 2]), 3);
+dvdy = sum(permute(dbdy, [3, 2, 1]) .* permute(vref, [1, 3, 2]), 3);
+
+aid = find(ismember(self.sys_variables,'a')); as = (aid-1) * n;
+avec = curr_cond(:,aid); aref = avec(self.mesh.elems);
+a = sum(permute(b, [3, 2, 1]) .* permute(aref, [1, 3, 2]), 3);
+dadx = sum(permute(dbdx, [3, 2, 1]) .* permute(aref, [1, 3, 2]), 3);
+dady = sum(permute(dbdy, [3, 2, 1]) .* permute(aref, [1, 3, 2]), 3);
+
+% get the turbulence field for the calculation
+if isfield(opts, 'mtvec'), mtvec = opts.mtvec;
+else, mtvec = zeros(size(uvec)); end
+mt = sum(permute(b, [3, 2, 1]) .* ...
+    permute(mtvec(self.mesh.elems), [1, 3, 2]), 3);
+
+%% calculate the u block
+r_uu1 = (mue + mt).*(dudx.*permute(dbdx, [3, 1, 2]) + ...
+    dudy.*permute(dbdy, [3, 1, 2])) + ...
+    (u.*dudx + v.*dudy).*permute(b, [3, 1, 2]);
+uu1_val = reshape(sum(r_uu1.*weights, 2), [], 1);
+
+r_ua1 = (2/(gamma-1)*a.*dadx).*permute(b, [3, 1, 2]);
+ua1_val = reshape(sum(r_ua1.*weights, 2), [], 1);
+
+%% calculate the v block
+r_vv1 = (mue + mt).*(dvdx.*permute(dbdx, [3, 1, 2]) + ...
+    dvdy.*permute(dbdy, [3, 1, 2])) + ...
+    (u.*dvdx + v.*dvdy).*permute(b, [3, 1, 2]);
+vv1_val = reshape(sum(r_vv1.*weights, 2), [], 1);
+
+r_va1 = (2/(gamma-1)*a.*dady).*permute(b, [3, 1, 2]);
+va1_val = reshape(sum(r_va1.*weights, 2), [], 1);
+
+%% calculate the a block
+r_au1 = (gamma-1)/2*(a.*dudx).*b(k,:,i);
+r_av1 = (gamma-1)/2*(a.*dvdy).*b(k,:,i);
+r_aa1 = (u.*dadx + v.*dady).*b(k,:,i);
+
+
+k_idx = reshape(elems, [], 1);
+
+% loop over all the elements
+count = 1;
+for i=1:n_elem
+    % loop over the base functions twice to use them as test and trial
+    for k=1:n_base % loop over the test functions
+        %% calculate the u block
+        % get the galerkin contrubution
+        r_uu1 = (mue + mt(i,:)).*(dudx(i,:).*dbdx(k,:,i) + dudy(i,:).*dbdy(k,:,i)) +... % diffusive part
+            (u(i,:).*dudx(i,:) + v(i,:).*dudy(i,:)).*b(k,:,i); % convective part
+        r_ua1 = (2/(gamma-1)*a(i,:).*dadx(i,:)).*b(k,:,i); % "pressure" contribution
+
+        % integrate the residuals function
+        uu1_val(count) = sum(weights(i,:).*(r_uu1));
+        ua1_val(count) = sum(weights(i,:).*(r_ua1));
+
+        %% calculate the v block
+        % get the galerkin contrubution
+        r_vv1 = (mue + mt(i,:)).*(dvdx(i,:).*dbdx(k,:,i) + dvdy(i,:).*dbdy(k,:,i)) +... % diffusive part
+            (u(i,:).*dvdx(i,:) + v(i,:).*dvdy(i,:)).*b(k,:,i); %convective  part
+        r_va1 = (2/(gamma-1)*a(i,:).*dady(i,:)).*b(k,:,i); % "pressure" contribution
+
+        % integrate the residuals function
+        vv1_val(count) = sum(weights(i,:).*(r_vv1));
+        va1_val(count) = sum(weights(i,:).*(r_va1));
+
+        %% calculate the p block
+        % get the galerkin contrubution
+        r_au1 = (gamma-1)/2*(a(i,:).*dudx(i,:)).*b(k,:,i);
+        r_av1 = (gamma-1)/2*(a(i,:).*dvdy(i,:)).*b(k,:,i);
+        r_aa1 = (u(i,:).*dadx(i,:) + v(i,:).*dady(i,:)).*b(k,:,i);
+
+        % integrate the residuals function
+        au1_val(count) = sum(weights(i,:).*(r_au1));
+        av1_val(count) = sum(weights(i,:).*(r_av1));
+        aa1_val(count) = sum(weights(i,:).*(r_aa1));
+
+        %% do other stuff
+        % get the global indices for the assembly
+        k_idx(count) = elems(i,k); % curr_elem(k); 
+
+        % count one up
+        count = count + 1;
+    end
+end
+
+%% form a sparse matrix from the galerkin terms
+% reshape the vectors for the sparse matrix assembly
+v1_glob = [uu1_val,    ua1_val,    vv1_val,    va1_val,    au1_val,    av1_val,    aa1_val   ];
+k1_glob = [k_idx + us, k_idx + us, k_idx + vs, k_idx + vs, k_idx + as, k_idx + as, k_idx + as];
+
+% get a sparse global matrix
+Res = accumarray(k1_glob', v1_glob');
+end
